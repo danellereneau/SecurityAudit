@@ -1,0 +1,263 @@
+// Prisma Schema for Subscription Manager
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== User Management ====================
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  email         String   @unique @db.VarChar(255)
+  passwordHash  String   @map("password_hash") @db.VarChar(255)
+  fullName      String?  @map("full_name") @db.VarChar(255)
+  timezone      String   @default("UTC") @db.VarChar(50)
+  currency      String   @default("USD") @db.VarChar(3)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  lastLogin     DateTime? @map("last_login")
+
+  // Relations
+  subscriptions   Subscription[]
+  categories      Category[]
+  paymentMethods  PaymentMethod[]
+  notifications   Notification[]
+  preferences     UserPreferences?
+  importLogs      ImportLog[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model UserPreferences {
+  id                        String   @id @default(uuid()) @db.Uuid
+  userId                    String   @unique @map("user_id") @db.Uuid
+  user                      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Notification preferences
+  enableEmailNotifications  Boolean  @default(true) @map("enable_email_notifications")
+  enablePushNotifications   Boolean  @default(true) @map("enable_push_notifications")
+  renewalReminderDays       Int[]    @default([7, 1]) @map("renewal_reminder_days")
+  notifyPriceIncreases      Boolean  @default(true) @map("notify_price_increases")
+  notifyTrialEndings        Boolean  @default(true) @map("notify_trial_endings")
+
+  // Display preferences
+  dashboardView             String   @default("monthly") @db.VarChar(20)
+  defaultCurrency           String   @default("USD") @map("default_currency") @db.VarChar(3)
+  dateFormat                String   @default("MM/DD/YYYY") @map("date_format") @db.VarChar(20)
+
+  // Analytics preferences
+  showOptimizationInsights  Boolean  @default(true) @map("show_optimization_insights")
+  spendingAlertThreshold    Decimal? @map("spending_alert_threshold") @db.Decimal(10, 2)
+
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
+
+  @@map("user_preferences")
+}
+
+// ==================== Categories ====================
+
+model Category {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String?  @map("user_id") @db.Uuid
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name        String   @db.VarChar(100)
+  icon        String?  @db.VarChar(50)
+  color       String?  @db.VarChar(7) // hex color
+  isDefault   Boolean  @default(false) @map("is_default")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  subscriptions Subscription[]
+
+  @@index([userId])
+  @@map("categories")
+}
+
+// ==================== Payment Methods ====================
+
+model PaymentMethod {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name      String   @db.VarChar(100) // e.g., "Chase Visa"
+  type      String   @db.VarChar(50) // credit_card, debit_card, paypal, bank_account
+  lastFour  String?  @map("last_four") @db.VarChar(4)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  subscriptions Subscription[]
+
+  @@index([userId])
+  @@map("payment_methods")
+}
+
+// ==================== Subscriptions ====================
+
+model Subscription {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  categoryId      String?  @map("category_id") @db.Uuid
+  category        Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  paymentMethodId String?  @map("payment_method_id") @db.Uuid
+  paymentMethod   PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+
+  // Basic info
+  name            String   @db.VarChar(255)
+  vendor          String?  @db.VarChar(255)
+  description     String?  @db.Text
+  websiteUrl      String?  @map("website_url") @db.VarChar(500)
+
+  // Billing
+  price           Decimal  @db.Decimal(10, 2)
+  currency        String   @default("USD") @db.VarChar(3)
+  billingCycle    String   @map("billing_cycle") @db.VarChar(20) // monthly, yearly, quarterly, weekly, custom
+  customCycleDays Int?     @map("custom_cycle_days")
+
+  // Dates
+  startDate       DateTime @map("start_date") @db.Date
+  nextBillingDate DateTime @map("next_billing_date") @db.Date
+  endDate         DateTime? @map("end_date") @db.Date
+  trialEndDate    DateTime? @map("trial_end_date") @db.Date
+
+  // Status
+  status          String   @default("active") @db.VarChar(20) // active, cancelled, trial, paused
+  isFreeTrial     Boolean  @default(false) @map("is_free_trial")
+  autoRenewal     Boolean  @default(true) @map("auto_renewal")
+
+  // Metadata
+  tags            String[] @db.Text
+  reminderDays    Int[]    @default([7, 1]) @map("reminder_days")
+  lastPriceCheck  DateTime? @map("last_price_check")
+
+  // Timestamps
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  cancelledAt     DateTime? @map("cancelled_at")
+
+  // Relations
+  priceHistory    PriceHistory[]
+  notes           SubscriptionNote[]
+  notifications   Notification[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([nextBillingDate])
+  @@index([categoryId])
+  @@map("subscriptions")
+}
+
+// ==================== Price History ====================
+
+model PriceHistory {
+  id              String   @id @default(uuid()) @db.Uuid
+  subscriptionId  String   @map("subscription_id") @db.Uuid
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  oldPrice        Decimal? @map("old_price") @db.Decimal(10, 2)
+  newPrice        Decimal  @map("new_price") @db.Decimal(10, 2)
+  changePercentage Decimal? @map("change_percentage") @db.Decimal(5, 2)
+  changedAt       DateTime @default(now()) @map("changed_at")
+  detectedBy      String   @default("user") @map("detected_by") @db.VarChar(20) // user, auto_detect, import
+  notes           String?  @db.Text
+
+  @@index([subscriptionId])
+  @@index([changedAt(sort: Desc)])
+  @@map("price_history")
+}
+
+// ==================== Subscription Notes ====================
+
+model SubscriptionNote {
+  id              String   @id @default(uuid()) @db.Uuid
+  subscriptionId  String   @map("subscription_id") @db.Uuid
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  content         String   @db.Text
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([subscriptionId])
+  @@map("subscription_notes")
+}
+
+// ==================== Notifications ====================
+
+model Notification {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  subscriptionId  String?  @map("subscription_id") @db.Uuid
+  subscription    Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  type            String   @db.VarChar(50) // renewal_reminder, trial_ending, price_increase, payment_failed, cancellation_reminder
+  title           String   @db.VarChar(255)
+  message         String   @db.Text
+
+  status          String   @default("pending") @db.VarChar(20) // pending, sent, read, dismissed
+  priority        String   @default("normal") @db.VarChar(20) // low, normal, high, urgent
+
+  scheduledFor    DateTime? @map("scheduled_for")
+  sentAt          DateTime? @map("sent_at")
+  readAt          DateTime? @map("read_at")
+
+  deliveryMethod  String   @default("in_app") @map("delivery_method") @db.VarChar(20) // in_app, email, both
+  emailSent       Boolean  @default(false) @map("email_sent")
+
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([status])
+  @@index([scheduledFor])
+  @@map("notifications")
+}
+
+// ==================== Analytics Cache ====================
+
+model AnalyticsCache {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  cacheKey  String   @map("cache_key") @db.VarChar(100)
+  cacheData Json     @map("cache_data") @db.JsonB
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, cacheKey])
+  @@index([expiresAt])
+  @@map("analytics_cache")
+}
+
+// ==================== Import Logs ====================
+
+model ImportLog {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  filename        String?  @db.VarChar(255)
+  totalRows       Int?     @map("total_rows")
+  successfulRows  Int?     @map("successful_rows")
+  failedRows      Int?     @map("failed_rows")
+  errors          Json?    @db.JsonB
+  status          String   @default("processing") @db.VarChar(20) // processing, completed, failed
+
+  createdAt       DateTime @default(now()) @map("created_at")
+  completedAt     DateTime? @map("completed_at")
+
+  @@index([userId])
+  @@map("import_logs")
+}
